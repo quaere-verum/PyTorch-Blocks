@@ -28,7 +28,7 @@ class MLP(nn.Module):
         if normalise_before_activation and normalise_output:
             net.append(nn.BatchNorm1d(output_dim))
         net.append(activation_fn_dict[activation_fn]())
-        if normalise_output:
+        if not normalise_before_activation and normalise_output:
             net.append(nn.BatchNorm1d(output_dim))
         self.net = nn.Sequential(*net)
 
