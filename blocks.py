@@ -181,15 +181,14 @@ class TimeseriesConv2D(nn.Module):
 class ResidualConv1D(nn.Module):
     def __init__(
         self,
-        in_channels: int, 
-        out_channels: int,
+        in_channels: int,
         kernel_size: int,
         stride: int,
     ):
         super().__init__()
         self.conv1d = nn.Conv1d(
-            in_channels=out_channels, 
-            out_channels=out_channels,
+            in_channels=in_channels, 
+            out_channels=in_channels,
             kernel_size=kernel_size,
             stride=stride,
         )
@@ -202,23 +201,32 @@ class ResidualConv1D(nn.Module):
         return self.conv1d(x) + self.connection(x)
 
 
-class ResidualTimeseriesConv2D(nn.Module):
+class ResidualTimeseriesConvolution(nn.Module):
     def __init__(
         self, 
         input_dim: Tuple[int, int],
         *,
-        out_channels: Tuple[int, ...], 
-        kernel_size: Union[int, Tuple[int, ...]],
-        stride: Union[int, Tuple[int, ...]],
+        out_channels: int, 
+        kernel_size: Union[int, Tuple[int, int]],
+        stride: Union[int, Tuple[int, int]],
+        residual_layers: int = 1,
         activation_fn: Union[Literal["relu", "gelu", "sigmoid", "tanh"], None] = None,
         normalise_output: bool = False,
     ):
         super().__init__()
+        if isinstance(kernel_size, int):
+            kernel_size = tuple(kernel_size for _ in range(residual_layers + 1))
+        else:
+            assert isinstance(kernel_size, tuple) and len(kernel_size) == residual_layers + 1
+        if isinstance(stride, int):
+            stride = tuple(stride for _ in range(residual_layers + 1))
+        else:
+            assert isinstance(stride, tuple) and len(stride) == residual_layers + 1
         rows, columns = input_dim
         modules = [
             TimeseriesConv2D(
                 columns=columns,
-                out_channels=out_channels[0],
+                out_channels=out_channels,
                 kernel_size=kernel_size[0],
                 stride=stride[0],
             )
@@ -229,32 +237,31 @@ class ResidualTimeseriesConv2D(nn.Module):
             modules.append(nn.BatchNorm1d(num_features=out_channels[0]))
         rows = math.ceil((rows - kernel_size[0] + 1) / stride[0])
         assert rows > 0
-        for k in range(1, len(out_channels)):
+        for k in range(residual_layers):
             modules.append(
                 ResidualConv1D(
-                    in_channels=out_channels[k - 1], 
-                    out_channels=out_channels[k],
-                    kernel_size=kernel_size[k],
-                    stride=stride[k],
+                    in_channels=out_channels, 
+                    kernel_size=kernel_size[k + 1],
+                    stride=stride[k + 1],
                 )
             )
             if activation_fn is not None:
                 modules.append(activation_fn_dict[activation_fn]())
             if normalise_output:
-                modules.append(nn.BatchNorm1d(num_features=out_channels[k]))
-            rows = math.ceil((rows - kernel_size[k] + 1) / stride[k])
+                modules.append(nn.BatchNorm1d(num_features=out_channels))
+            rows = math.ceil((rows - kernel_size[k + 1] + 1) / stride[k + 1])
             assert rows > 0
         modules.append(
             MMLP(
-                input_dim=(rows, out_channels[-1]),
+                input_dim=(rows, out_channels),
                 equation="bcr, ri -> bc",
-                bias_shape=(out_channels[-1],)
+                bias_shape=(out_channels,)
             )
         )
         if activation_fn is not None:
             modules.append(activation_fn_dict[activation_fn]())
         if normalise_output:
-            modules.append(nn.BatchNorm1d(num_features=out_channels[-1]))
+            modules.append(nn.BatchNorm1d(num_features=out_channels))
         self.net = nn.Sequential(*modules)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -262,14 +269,14 @@ class ResidualTimeseriesConv2D(nn.Module):
 
 
 if __name__ == "__main__":
-    input_dim = (12, 6)
-    out_channels = (4, 4)
+    input_dim = (29, 7)
+    out_channels = 5
     kernel_size = (3, 2)
-    stride = (1, 2)
+    stride = (3, 2)
     activation_fn = "relu"
-    normalise_output = True
+    normalise_output = False
 
-    test = ResidualTimeseriesConv2D(
+    test = ResidualTimeseriesConvolution(
         input_dim=input_dim,
         out_channels=out_channels,
         kernel_size=kernel_size,
@@ -278,4 +285,4 @@ if __name__ == "__main__":
         normalise_output=normalise_output,
     )
 
-    print(test(torch.randn(7, 12, 6)).shape)
+    print(test(torch.randn((13,) + input_dim)).shape)
